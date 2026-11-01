@@ -41,6 +41,7 @@ namespace QuadDock.Core
         private int _monitorDpi = 96;
         private IntPtr _switchTarget;
         private int _switchAttempts;
+        private int _lastForcedLayout;
         private bool _dragging;
         private bool _negotiated;
         private bool _allHidden;
@@ -298,8 +299,9 @@ namespace QuadDock.Core
                     info.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
                     if (Win32.GetMonitorInfo(handle, ref info))
                     {
-                        return Rectangle.FromLTRB(
+                        Rectangle work = Rectangle.FromLTRB(
                             info.rcWork.Left, info.rcWork.Top, info.rcWork.Right, info.rcWork.Bottom);
+                        return ExcludeTaskbar(work, monitor);
                     }
                 }
             }
@@ -308,7 +310,66 @@ namespace QuadDock.Core
                 Log.Write(ex);
             }
 
-            return monitor;
+            return ExcludeTaskbar(monitor, monitor);
+        }
+
+        /// <summary>
+        /// 换屏、全屏程序、外壳刚重启这些时候，读到的 rcWork 会等于整个屏幕——任务栏没被算进去。
+        /// 这时底部侧栏会直接压到任务栏上。既然一个边都没被排除，就按任务栏自己的矩形再裁一次。
+        /// 自动隐藏的任务栏不裁：那种情况下全屏本来就是对的。
+        /// </summary>
+        private static Rectangle ExcludeTaskbar(Rectangle work, Rectangle monitor)
+        {
+            if (work != monitor)
+            {
+                return work;
+            }
+
+            try
+            {
+                var state = new APPBARDATA();
+                state.cbSize = Marshal.SizeOf(typeof(APPBARDATA));
+                Win32.SHAppBarMessage(Win32.ABM_GETSTATE, ref state);
+                if ((state.lParam.ToInt64() & Win32.ABS_AUTOHIDE) != 0)
+                {
+                    return work;
+                }
+
+                var data = new APPBARDATA();
+                data.cbSize = Marshal.SizeOf(typeof(APPBARDATA));
+                if (Win32.SHAppBarMessage(Win32.ABM_GETTASKBARPOS, ref data) == UIntPtr.Zero)
+                {
+                    return work;
+                }
+
+                Rectangle bar = Rectangle.FromLTRB(
+                    data.rc.Left, data.rc.Top, data.rc.Right, data.rc.Bottom);
+                if (bar.Width <= 0 || bar.Height <= 0 || !monitor.IntersectsWith(bar))
+                {
+                    return work;
+                }
+
+                switch (data.uEdge)
+                {
+                    case Win32.ABE_LEFT:
+                        return Rectangle.FromLTRB(
+                            Math.Max(work.Left, bar.Right), work.Top, work.Right, work.Bottom);
+                    case Win32.ABE_TOP:
+                        return Rectangle.FromLTRB(
+                            work.Left, Math.Max(work.Top, bar.Bottom), work.Right, work.Bottom);
+                    case Win32.ABE_RIGHT:
+                        return Rectangle.FromLTRB(
+                            work.Left, work.Top, Math.Min(work.Right, bar.Left), work.Bottom);
+                    default:
+                        return Rectangle.FromLTRB(
+                            work.Left, work.Top, work.Right, Math.Min(work.Bottom, bar.Top));
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Write(ex);
+                return work;
+            }
         }
 
         private AppBarSlot Bar(Edge edge)
@@ -1105,6 +1166,14 @@ namespace QuadDock.Core
                     return;
                 }
             }
+
+            // 万一外壳给的区域怎么协商都对不上预期（比如位置被别人占了），别一直重排：
+            // 每次重排都会再广播一次 WM_SETTINGCHANGE，不拦就是一个空转循环。
+            if (unchecked(Environment.TickCount - _lastForcedLayout) < 600)
+            {
+                return;
+            }
+            _lastForcedLayout = Environment.TickCount;
 
             ApplyLayout(true);
         }

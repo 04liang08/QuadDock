@@ -96,6 +96,15 @@ namespace QuadDock.Core
         public const uint ABM_NEW = 0x0000;
         public const uint ABM_REMOVE = 0x0001;
         public const uint ABM_SETPOS = 0x0003;
+        public const uint ABM_GETSTATE = 0x0004;
+        public const uint ABM_GETTASKBARPOS = 0x0005;
+
+        public const long ABS_AUTOHIDE = 0x0000001;
+
+        public const uint ABE_LEFT = 0;
+        public const uint ABE_TOP = 1;
+        public const uint ABE_RIGHT = 2;
+        public const uint ABE_BOTTOM = 3;
 
         public const uint MONITOR_DEFAULTTONEAREST = 2;
 
