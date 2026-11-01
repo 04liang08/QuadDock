@@ -23,6 +23,9 @@ namespace QuadDock.Core
         /// <summary>五个槽位（0 中央、1 左、2 上、3 右、4 下）各自压着的桌面 GUID。</summary>
         private readonly Guid[] _slotDesktop = new Guid[DockSettings.SlotCount];
 
+        /// <summary>每个桌面上"上次用过的那个窗口"，用来在侧栏里做标记。</summary>
+        private readonly Dictionary<Guid, IntPtr> _recent = new Dictionary<Guid, IntPtr>();
+
         private readonly VirtualDesktops _desktops = new VirtualDesktops();
         private readonly HotkeyWindow _hotkey;
         private readonly System.Windows.Forms.Timer _commitTimer;
@@ -48,6 +51,7 @@ namespace QuadDock.Core
         {
             _settings = SettingsStore.Load();
             Theme.Apply((ThemeMode)_settings.ThemeMode);
+            Theme.ApplyStyle((StripStyle)_settings.Style);
 
             foreach (Edge edge in Order)
             {
@@ -515,6 +519,21 @@ namespace QuadDock.Core
                 : new List<DesktopWindow>();
             List<Guid> ids = _desktops.Available ? _desktops.GetDesktopIds() : new List<Guid>();
 
+            // 顺手记下"现在前台的是哪个窗口、属于哪个桌面"。
+            // 前台窗口一定在中央那个桌面上，只有靠这条记录它才能在别的侧栏里留下标记。
+            IntPtr foreground = Win32.GetForegroundWindow();
+            if (foreground != IntPtr.Zero)
+            {
+                foreach (DesktopWindow window in windows)
+                {
+                    if (window.Handle == foreground)
+                    {
+                        _recent[window.DesktopId] = foreground;
+                        break;
+                    }
+                }
+            }
+
             foreach (Edge edge in Order)
             {
                 Guid desktop = _slotDesktop[DockSettings.SlotOf(edge)];
@@ -529,7 +548,15 @@ namespace QuadDock.Core
                 }
 
                 int position = ids.IndexOf(desktop) + 1;
-                _strips[edge].SetHint(position > 0 ? "桌面 " + position : "桌面 —");
+                _strips[edge].SetDesktopNumber(position);
+
+                IntPtr recent;
+                if (!_recent.TryGetValue(desktop, out recent))
+                {
+                    recent = IntPtr.Zero;
+                }
+                _strips[edge].SetRecent(recent);
+
                 _strips[edge].SetWindows(list);
             }
         }
@@ -761,6 +788,7 @@ namespace QuadDock.Core
             _menu.Items.Add(toggle);
 
             _menu.Items.Add(ThemeMenu());
+            _menu.Items.Add(StyleMenu());
             _menu.Items.Add(MonitorMenu());
             _menu.Items.Add(StartupItem());
 
@@ -848,6 +876,35 @@ namespace QuadDock.Core
                 (_settings.ThemeMode == (int)mode ? "✓  " : "     ") + text);
             item.Click += (s, e) => SetTheme(mode);
             parent.DropDownItems.Add(item);
+        }
+
+        private ToolStripMenuItem StyleMenu()
+        {
+            var menu = new ToolStripMenuItem("外观风格");
+            AddStyleItem(menu, "卡片（投影 + 圆角）", StripStyle.Card);
+            AddStyleItem(menu, "列表（细分隔线）", StripStyle.List);
+            return menu;
+        }
+
+        private void AddStyleItem(ToolStripMenuItem parent, string text, StripStyle style)
+        {
+            var item = new ToolStripMenuItem(
+                (_settings.Style == (int)style ? "✓  " : "     ") + text);
+            item.Click += (s, e) => SetStyle(style);
+            parent.DropDownItems.Add(item);
+        }
+
+        private void SetStyle(StripStyle style)
+        {
+            _settings.Style = (int)style;
+            SettingsStore.Save(_settings);
+            Theme.ApplyStyle(style);
+
+            foreach (StripForm strip in _strips.Values)
+            {
+                strip.BackColor = Theme.Surface;
+                strip.Invalidate();
+            }
         }
 
         private ToolStripMenuItem MonitorMenu()

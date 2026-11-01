@@ -28,6 +28,9 @@ namespace QuadDock.Core
         /// <summary>0 = 跟随系统，1 = 浅色，2 = 深色。</summary>
         public int ThemeMode { get; set; }
 
+        /// <summary>侧栏风格：0 = 卡片式，1 = 列表式。</summary>
+        public int Style { get; set; }
+
         /// <summary>目标显示器设备名，空表示主显示器。</summary>
         public string Monitor { get; set; } = "";
 
@@ -187,6 +190,11 @@ namespace QuadDock.Core
             if (settings.ThemeMode < 0 || settings.ThemeMode > 2)
             {
                 settings.ThemeMode = 0;
+            }
+
+            if (settings.Style < 0 || settings.Style > 1)
+            {
+                settings.Style = 0;
             }
 
             const int allowedModifiers =

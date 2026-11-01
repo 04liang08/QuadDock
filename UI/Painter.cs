@@ -48,5 +48,32 @@ namespace QuadDock.UI
                 g.SmoothingMode = previous;
             }
         }
+
+        /// <summary>描边。矩形向内收半个线宽，保证线画在给定的矩形之内。</summary>
+        public static void StrokeRounded(Graphics g, Rectangle rect, int radius, Color color, int width)
+        {
+            int stroke = Math.Max(1, width);
+            int inset = (stroke + 1) / 2;
+            Rectangle inner = Rectangle.Inflate(rect, -inset, -inset);
+            if (inner.Width <= 0 || inner.Height <= 0)
+            {
+                return;
+            }
+
+            SmoothingMode previous = g.SmoothingMode;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            try
+            {
+                using (GraphicsPath path = RoundedPath(inner, Math.Max(0, radius - inset)))
+                using (var pen = new Pen(color, stroke))
+                {
+                    g.DrawPath(pen, path);
+                }
+            }
+            finally
+            {
+                g.SmoothingMode = previous;
+            }
+        }
     }
 }

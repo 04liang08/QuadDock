@@ -19,16 +19,17 @@ namespace QuadDock.UI
             public IntPtr Handle;
             public string Title;
             public Guid DesktopId;
+            public bool Minimized;
             public Rectangle Rect;
             public bool Hover;
         }
 
-        private const int PadLogical = 8;
-        private const int GapLogical = 6;
+        private const int PadLogical = 10;
+        private const int GapLogical = 8;
         private const int ChipPadXLogical = 8;
         private const int ChipPadYLogical = 6;
-        private const int RadiusLogical = 7;
-        private const int RingLogical = 1;
+        private const int RadiusLogical = 10;
+        private const int BarLogical = 3;
 
         private readonly Edge _edge;
         private readonly DockManager _manager;
@@ -37,6 +38,9 @@ namespace QuadDock.UI
 
         private int _scroll;
         private int _content;
+        private int _gap;
+        private int _chipPadX;
+        private int _chipPadY;
         private int _hoverIndex = -1;
         private int _pressIndex = -1;
         private bool _pressed;
@@ -45,7 +49,8 @@ namespace QuadDock.UI
         private int _resizeThicknessStart;
         private int _lastDragTick;
         private string _signature = "";
-        private string _hint = "";
+        private int _desktopNumber;
+        private IntPtr _recent;
 
         public StripForm(Edge edge, DockManager manager)
         {
@@ -53,6 +58,7 @@ namespace QuadDock.UI
             _manager = manager;
 
             Text = "QuadDock";
+            Font = Theme.UiFont;
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
             TopMost = true;
@@ -101,16 +107,31 @@ namespace QuadDock.UI
             }
         }
 
-        /// <summary>空列表时显示的说明文字，让"这条边为什么是空的"一眼能看出来。</summary>
-        internal void SetHint(string hint)
+        /// <summary>这条边压着第几个桌面。有内容时画成背景水印，空的时候画成居中提示。</summary>
+        internal void SetDesktopNumber(int number)
         {
-            hint = hint ?? "";
-            if (_hint == hint)
+            if (_desktopNumber == number)
             {
                 return;
             }
 
-            _hint = hint;
+            _desktopNumber = number;
+            Invalidate();
+        }
+
+        /// <summary>
+        /// 标记"上次在这个桌面上用过的窗口"。
+        /// 注意不能用前台窗口：四条侧栏装的全是非中央桌面，而前台窗口一定在中央那个桌面上，
+        /// 所以前台标记永远不会亮。这里由扫描时记下的最近前台窗口来标。
+        /// </summary>
+        internal void SetRecent(IntPtr hwnd)
+        {
+            if (_recent == hwnd)
+            {
+                return;
+            }
+
+            _recent = hwnd;
             Invalidate();
         }
 
@@ -130,7 +151,8 @@ namespace QuadDock.UI
                 {
                     Handle = window.Handle,
                     Title = window.Title,
-                    DesktopId = window.DesktopId
+                    DesktopId = window.DesktopId,
+                    Minimized = window.IsMinimized
                 });
             }
 
@@ -190,9 +212,16 @@ namespace QuadDock.UI
             bool vertical = _edge.IsVertical();
             bool narrow = (vertical ? width : height) < Dpi.Scale(130, dpi);
             int pad = Dpi.Scale(narrow ? 6 : PadLogical, dpi);
-            int gap = Dpi.Scale(narrow ? 5 : GapLogical, dpi);
+            int gap = Dpi.Scale(narrow ? 6 : GapLogical, dpi);
+            _gap = gap;
             int chipPadX = Dpi.Scale(ChipPadXLogical, dpi);
             int chipPadY = Dpi.Scale(ChipPadYLogical, dpi);
+            if (chipPadX * 2 >= width)
+            {
+                chipPadX = Math.Max(2, (width - Dpi.Scale(12, dpi)) / 2);
+            }
+            _chipPadX = chipPadX;
+            _chipPadY = chipPadY;
 
             int viewport = vertical ? height : width;
             int chipWidth = Math.Max(Dpi.Scale(24, dpi), width - pad * 2);
@@ -248,41 +277,35 @@ namespace QuadDock.UI
             g.Clear(Theme.Surface);
 
             int dpi = DeviceDpi;
-            int ring = Math.Max(1, Dpi.Scale(RingLogical, dpi));
             int radius = Dpi.Scale(RadiusLogical, dpi);
-            int chipPadX = Dpi.Scale(ChipPadXLogical, dpi);
-            int chipPadY = Dpi.Scale(ChipPadYLogical, dpi);
             Rectangle clip = ClientRectangle;
+            bool card = Theme.Style == StripStyle.Card;
 
-            foreach (Slot slot in _slots)
+            // 水印在卡片下面，先把地铺好
+            if (_slots.Count > 0)
             {
+                DrawWatermark(g, dpi);
+            }
+
+            for (int i = 0; i < _slots.Count; i++)
+            {
+                Slot slot = _slots[i];
                 if (!clip.IntersectsWith(slot.Rect))
                 {
                     continue;
                 }
 
-                Painter.FillRounded(
-                    g,
-                    Rectangle.Inflate(slot.Rect, ring, ring),
-                    radius + ring,
-                    slot.Hover ? Theme.Accent : Theme.CardBorder);
-                Painter.FillRounded(g, slot.Rect, radius, Theme.CardFill);
-
-                Rectangle textRect = Rectangle.Inflate(slot.Rect, -chipPadX, -chipPadY);
-                if (textRect.Width > 0 && textRect.Height > 0)
+                bool focus = _recent != IntPtr.Zero && slot.Handle == _recent;
+                if (card)
                 {
-                    TextRenderer.DrawText(
-                        g,
-                        slot.Title,
-                        Font,
-                        textRect,
-                        Theme.Text,
-                        TextFormatFlags.Left
-                        | TextFormatFlags.VerticalCenter
-                        | TextFormatFlags.EndEllipsis
-                        | TextFormatFlags.NoPrefix
-                        | TextFormatFlags.SingleLine);
+                    PaintCard(g, slot, dpi, radius, focus);
                 }
+                else
+                {
+                    PaintRow(g, slot, i, dpi, radius, focus);
+                }
+
+                PaintTitle(g, slot);
             }
 
             if (_slots.Count == 0)
@@ -294,15 +317,168 @@ namespace QuadDock.UI
             DrawEdgeLine(g, dpi);
         }
 
-        /// <summary>没有任何窗口时，把这条边绑定的桌面写出来，避免看起来像坏了。</summary>
-        private void DrawEmptyHint(Graphics g, int dpi)
+        /// <summary>卡片式：有底、有投影、顶部一条高光；悬停整块提亮并描一圈强调色。</summary>
+        private void PaintCard(Graphics g, Slot slot, int dpi, int radius, bool focus)
         {
-            if (string.IsNullOrEmpty(_hint))
+            Rectangle rect = slot.Rect;
+            int line = Math.Max(1, Dpi.Scale(1, dpi));
+
+            Rectangle shadow = rect;
+            shadow.Offset(0, Math.Max(1, Dpi.Scale(2, dpi)));
+            Painter.FillRounded(g, shadow, radius, Theme.CardShadow);
+
+            Painter.FillRounded(
+                g,
+                rect,
+                radius,
+                slot.Hover || focus ? Theme.CardHoverFill : Theme.CardFill);
+
+            // 顶部 1px 高光：比投影便宜，也更能让人觉得卡片是"浮"着的
+            int inset = Math.Min(radius, rect.Width / 2);
+            int width = Math.Max(0, rect.Width - inset * 2);
+            if (width > 0)
+            {
+                using (var brush = new SolidBrush(Theme.CardHighlight))
+                {
+                    g.FillRectangle(brush, new Rectangle(rect.X + inset, rect.Y, width, line));
+                }
+            }
+
+            if (slot.Hover)
+            {
+                Painter.StrokeRounded(g, rect, radius, Theme.AccentRing, line);
+            }
+            else if (!focus)
+            {
+                Painter.StrokeRounded(g, rect, radius, Theme.CardBorder, line);
+            }
+
+            if (focus)
+            {
+                PaintFocusBar(g, rect, dpi, radius);
+            }
+        }
+
+        /// <summary>列表式：没有卡片底，靠细分隔线分栏，悬停时整行浮起一层。</summary>
+        private void PaintRow(Graphics g, Slot slot, int index, int dpi, int radius, bool focus)
+        {
+            Rectangle rect = slot.Rect;
+            int line = Math.Max(1, Dpi.Scale(1, dpi));
+
+            if (slot.Hover || focus)
+            {
+                Painter.FillRounded(g, rect, radius, Theme.RowHoverFill);
+            }
+            else if (index > 0)
+            {
+                int gap = Math.Max(2, _gap);
+                Rectangle separator = _edge.IsVertical()
+                    ? new Rectangle(rect.X, rect.Y - gap / 2, rect.Width, line)
+                    : new Rectangle(rect.X - gap / 2, rect.Y, line, rect.Height);
+                if (separator.Width > 0 && separator.Height > 0)
+                {
+                    using (var brush = new SolidBrush(Theme.Separator))
+                    {
+                        g.FillRectangle(brush, separator);
+                    }
+                }
+            }
+
+            if (focus)
+            {
+                PaintFocusBar(g, rect, dpi, radius);
+            }
+        }
+
+        /// <summary>上次在这个桌面上用过的窗口：贴着卡片阅读侧的一条强调色竖条。</summary>
+        private void PaintFocusBar(Graphics g, Rectangle rect, int dpi, int radius)
+        {
+            int width = Math.Max(2, Dpi.Scale(BarLogical, dpi));
+            int inset = Math.Max(width, radius / 2);
+            int height = rect.Height - inset * 2;
+            if (height < Dpi.Scale(8, dpi))
             {
                 return;
             }
 
-            int pad = Dpi.Scale(5, dpi);
+            var bar = new Rectangle(
+                rect.X + Math.Max(1, Dpi.Scale(1, dpi)),
+                rect.Y + inset,
+                width,
+                height);
+            Painter.FillRounded(g, bar, width / 2, Theme.Accent);
+        }
+
+        private void PaintTitle(Graphics g, Slot slot)
+        {
+            Rectangle textRect = Rectangle.Inflate(slot.Rect, -_chipPadX, -_chipPadY);
+            if (textRect.Width <= 0 || textRect.Height <= 0)
+            {
+                return;
+            }
+
+            TextRenderer.DrawText(
+                g,
+                slot.Title,
+                Font,
+                textRect,
+                slot.Minimized ? Theme.TextDim : Theme.Text,
+                TextFormatFlags.Left
+                | TextFormatFlags.VerticalCenter
+                | TextFormatFlags.EndEllipsis
+                | TextFormatFlags.NoPrefix
+                | TextFormatFlags.SingleLine);
+        }
+
+        /// <summary>
+        /// 把这条边压着的桌面序号画成背景水印。上边栏只有 56px 高，塞一行标头就把内容挤没了；
+        /// 水印不占布局，又比空无一物更容易看出这条边的归属。
+        /// </summary>
+        private void DrawWatermark(Graphics g, int dpi)
+        {
+            if (_desktopNumber <= 0)
+            {
+                return;
+            }
+
+            string text = _desktopNumber.ToString();
+            Size size = TextRenderer.MeasureText(
+                text, Theme.WatermarkFont, new Size(800, 800), TextFormatFlags.NoPrefix);
+            if (size.Width <= 0 || size.Height <= 0)
+            {
+                return;
+            }
+
+            int margin = Dpi.Scale(4, dpi);
+
+            // 放在远端：卡片从上往下长，远端那块永远是最空的
+            Rectangle area = _edge.IsVertical()
+                ? new Rectangle(0, ClientSize.Height - size.Height - margin, ClientSize.Width, size.Height)
+                : new Rectangle(ClientSize.Width - size.Width - margin, 0, size.Width, ClientSize.Height);
+
+            if (area.Width <= 0 || area.Height <= 0)
+            {
+                return;
+            }
+
+            TextRenderer.DrawText(
+                g,
+                text,
+                Theme.WatermarkFont,
+                area,
+                Theme.Watermark,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        }
+
+        /// <summary>没有任何窗口时，把这条边绑定的桌面写出来，避免看起来像坏了。</summary>
+        private void DrawEmptyHint(Graphics g, int dpi)
+        {
+            if (_desktopNumber <= 0)
+            {
+                return;
+            }
+
+            int pad = Dpi.Scale(4, dpi);
             Rectangle area = Rectangle.Inflate(ClientRectangle, -pad, -pad);
             if (area.Width <= 0 || area.Height <= 0)
             {
@@ -311,7 +487,7 @@ namespace QuadDock.UI
 
             TextRenderer.DrawText(
                 g,
-                _hint,
+                "桌面 " + _desktopNumber,
                 Font,
                 area,
                 Theme.EmptyHint,
