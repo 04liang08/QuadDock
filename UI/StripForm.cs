@@ -72,6 +72,11 @@ namespace QuadDock.UI
         private bool _pressed;
         private bool _resizing;
         private bool _spines;
+
+        /// <summary>竖排专用字号和图标尺寸，跟着书脊宽度变。</summary>
+        private Font _spineFont;
+        private int _spineFontWidth;
+        private int _spineIcon;
         private int _resizePointerStart;
         private int _resizeThicknessStart;
         private int _lastDragTick;
@@ -323,23 +328,28 @@ namespace QuadDock.UI
         }
 
         /// <summary>
-        /// 竖排：每一行是一条竖着的"书脊"，宽度只有窄窄一条，文字旋转 90° 顺着边跑，
-        /// 于是整条标题都能放进来。横向放得下几列就放几列，按高度均衡分配。
+        /// 竖排：每一行是一条竖着的"书脊"，文字旋转 90° 顺着边跑，于是整条标题都能放进来。
+        /// 宽度跟着侧栏走——侧栏加宽时把书脊本身加宽，而不是往里多塞几列；
+        /// 加宽到上限之后再多出来的宽度就留白，两侧居中。
         /// </summary>
         private void LayoutSpines(int dpi, int pad, int gap, int chipPad)
         {
             int width = ClientSize.Width;
             int height = ClientSize.Height;
 
-            int iconSize = Dpi.Scale(IconLogical, dpi);
-            int iconGap = Dpi.Scale(IconGapLogical, dpi);
             int minSpine = Dpi.Scale(22, dpi);
+            int maxSpineWidth = Dpi.Scale(48, dpi);
 
             int usable = Math.Max(minSpine, width - pad * 2);
-            int columns = Math.Max(1, Math.Min(4, (usable + gap) / (minSpine + gap)));
-            int spineWidth = Math.Max(minSpine, (usable - (columns - 1) * gap) / columns);
+
+            int columns = usable < minSpine * 2 + gap ? 1 : 2;
+            int spineWidth = Math.Min(maxSpineWidth, (usable - (columns - 1) * gap) / columns);
             int block = columns * spineWidth + (columns - 1) * gap;
             int startX = pad + Math.Max(0, (width - pad * 2 - block) / 2);
+
+            UpdateSpineMetrics(dpi, spineWidth);
+            int iconSize = _spineIcon;
+            int iconGap = Dpi.Scale(IconGapLogical, dpi);
 
             // 单条再长也留一半给别的窗口，超出的截断
             int maxSpine = Math.Max(Dpi.Scale(120, dpi), height / 2);
@@ -349,7 +359,7 @@ namespace QuadDock.UI
             for (int i = 0; i < _slots.Count; i++)
             {
                 int extra = _slots[i].Icon != null ? iconSize + iconGap : 0;
-                int h = chipPad * 2 + extra + Measure(_slots[i].Title);
+                int h = chipPad * 2 + extra + MeasureSpine(_slots[i].Title);
                 h = Math.Max(h, Dpi.Scale(52, dpi));
                 h = Math.Min(h, maxSpine);
                 heights[i] = h;
@@ -404,6 +414,39 @@ namespace QuadDock.UI
                 Font,
                 new Size(1000, 1000),
                 TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix).Width;
+        }
+
+        private int MeasureSpine(string text)
+        {
+            return TextRenderer.MeasureText(
+                text,
+                _spineFont ?? Font,
+                new Size(1000, 1000),
+                TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix).Width;
+        }
+
+        /// <summary>
+        /// 书脊里的字号和图标跟着书脊宽度走。只把卡片拉宽、字还是那么小，
+        /// 看着就是一条空荡荡的白条，所以宽一点字也大一点（最多放到 1.5 倍）。
+        /// </summary>
+        private void UpdateSpineMetrics(int dpi, int spineWidth)
+        {
+            if (_spineFont == null || _spineFontWidth != spineWidth)
+            {
+                if (_spineFont != null)
+                {
+                    _spineFont.Dispose();
+                }
+
+                float basis = Math.Max(1, Dpi.Scale(23, dpi));
+                float scale = Math.Min(1.5f, spineWidth / basis);
+                _spineFont = new Font(Theme.UiFont.FontFamily, 9f * scale, FontStyle.Regular);
+                _spineFontWidth = spineWidth;
+            }
+
+            _spineIcon = Math.Min(
+                Dpi.Scale(22, dpi),
+                Math.Max(Dpi.Scale(13, dpi), spineWidth * 2 / 3));
         }
 
         private int IconSize(int dpi)
@@ -620,8 +663,9 @@ namespace QuadDock.UI
             slot.DropLabel();
 
             int pad = _chipPadX;
-            int iconSize = IconSize(dpi);
+            int iconSize = _spineIcon > 0 ? _spineIcon : IconSize(dpi);
             int iconGap = Dpi.Scale(IconGapLogical, dpi);
+            Font font = _spineFont ?? Font;
             int textX = pad + (slot.Icon != null ? iconSize + iconGap : 0);
             int textWidth = Math.Max(0, length - textX - pad);
 
@@ -646,7 +690,7 @@ namespace QuadDock.UI
                         format.LineAlignment = StringAlignment.Center;
                         g.DrawString(
                             slot.Title,
-                            Font,
+                            font,
                             brush,
                             new RectangleF(textX, 0, textWidth, thickness),
                             format);
@@ -1086,6 +1130,11 @@ namespace QuadDock.UI
             foreach (Slot slot in _slots)
             {
                 slot.DropLabel();
+            }
+            if (_spineFont != null)
+            {
+                _spineFont.Dispose();
+                _spineFont = null;
             }
             base.OnFormClosed(e);
         }
