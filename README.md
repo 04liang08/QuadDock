@@ -4,6 +4,12 @@
 
 一共 5 个虚拟桌面：中央一个，四条边各压一个。**点哪条边，就把中央的桌面和它交换**——像四个卡槽，把想用的那张抽到中间。
 
+## 下载
+
+到 [Releases](https://github.com/04liang08/QuadDock/releases) 下最新的 `QuadDock-*-win-x64.exe`，双击就能用。自包含单文件，**不需要装 .NET**。
+
+首次启动会占住四条边；`Ctrl + Alt + Space` 随时收起 / 叫回来。想开机自启，右键侧栏 →「开机自动启动」。
+
 ## 用起来
 
 | 操作 | 效果 |
@@ -57,18 +63,21 @@
 
 ## 编译
 
-需要 **.NET 8 SDK**（本项目在 8.0.427 上验证）。注意本机 SDK 装在 `D:\software\dotnet8`，不在 PATH 里，直接敲 `dotnet` 会用到系统自带的 3.1：
+需要 **.NET 8 SDK**（本项目在 8.0.427 上验证）。如果机器上还装着更老的 SDK（比如 Windows 自带那套 3.1），直接敲 `dotnet` 可能会用错版本、报「无效项目类型」，这时用 SDK 8 的绝对路径：
 
 ```bash
-D:/software/dotnet8/dotnet.exe build -c Release
+dotnet build -c Release
 ```
 
-发布成单文件（自包含，约 70 MB）：
+发布成自包含单文件（约 70 MB，目标机器不用装运行时）：
 
 ```bash
-D:/software/dotnet8/dotnet.exe publish -c Release -r win-x64 --self-contained true \
-  -p:PublishSingleFile=true
+dotnet publish -c Release -r win-x64 --self-contained true \
+  -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true \
+  -p:IncludeNativeLibrariesForSelfExtract=true
 ```
+
+**发布前先退出正在运行的实例**，否则 dist 里的 exe 被占用，`GenerateBundle` 会报 MSB4018。
 
 如果目标机器装了 .NET 8 桌面运行时，去掉 `--self-contained true` 可以把体积压到 1–2 MB。
 

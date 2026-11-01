@@ -14,7 +14,7 @@
     <Product>QuadDock · 四边侧栏</Product>
     <AssemblyTitle>QuadDock · 四边侧栏</AssemblyTitle>
     <Description>把屏幕的上下左右四条边都变成空侧栏，工作区被真实挤压成中间一块。</Description>
-    <Version>0.1.0</Version>
+    <Version>0.4.0</Version>
     <NeutralLanguage>zh-Hans</NeutralLanguage>
     <Platforms>x64</Platforms>
   </PropertyGroup>
