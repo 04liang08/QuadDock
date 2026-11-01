@@ -329,8 +329,8 @@ namespace QuadDock.UI
 
         /// <summary>
         /// 竖排：每一行是一条竖着的"书脊"，文字旋转 90° 顺着边跑，于是整条标题都能放进来。
-        /// 宽度跟着侧栏走——侧栏加宽时把书脊本身加宽，而不是往里多塞几列；
-        /// 加宽到上限之后再多出来的宽度就留白，两侧居中。
+        /// 书脊横向铺满整条侧栏——多切一列的话，窗口少的时候右边会空出整列，
+        /// 看起来就像"标签只占了侧栏一半"。
         /// </summary>
         private void LayoutSpines(int dpi, int pad, int gap, int chipPad)
         {
@@ -338,21 +338,20 @@ namespace QuadDock.UI
             int height = ClientSize.Height;
 
             int minSpine = Dpi.Scale(22, dpi);
-            int maxSpineWidth = Dpi.Scale(48, dpi);
-
             int usable = Math.Max(minSpine, width - pad * 2);
 
-            int columns = usable < minSpine * 2 + gap ? 1 : 2;
-            int spineWidth = Math.Min(maxSpineWidth, (usable - (columns - 1) * gap) / columns);
-            int block = columns * spineWidth + (columns - 1) * gap;
-            int startX = pad + Math.Max(0, (width - pad * 2 - block) / 2);
+            int columns = 1;
+            int spineWidth = usable;
+            int startX = pad;
 
             UpdateSpineMetrics(dpi, spineWidth);
             int iconSize = _spineIcon;
             int iconGap = Dpi.Scale(IconGapLogical, dpi);
 
-            // 单条再长也留一半给别的窗口，超出的截断
-            int maxSpine = Math.Max(Dpi.Scale(120, dpi), height / 2);
+            // 单列时一条可以占满整条边，反正有滚动；多列才需要给别的窗口留位置
+            int maxSpine = columns == 1
+                ? Math.Max(Dpi.Scale(120, dpi), height - pad * 2)
+                : Math.Max(Dpi.Scale(120, dpi), height / 2);
 
             var heights = new int[_slots.Count];
             int total = 0;
@@ -427,7 +426,8 @@ namespace QuadDock.UI
 
         /// <summary>
         /// 书脊里的字号和图标跟着书脊宽度走。只把卡片拉宽、字还是那么小，
-        /// 看着就是一条空荡荡的白条，所以宽一点字也大一点（最多放到 1.5 倍）。
+        /// 看着就是一条空荡荡的白条。用的是开方而不是线性——线性放大的话，
+        /// 侧栏一宽，标题就会大到夸张。
         /// </summary>
         private void UpdateSpineMetrics(int dpi, int spineWidth)
         {
@@ -439,14 +439,19 @@ namespace QuadDock.UI
                 }
 
                 float basis = Math.Max(1, Dpi.Scale(23, dpi));
-                float scale = Math.Min(1.5f, spineWidth / basis);
-                _spineFont = new Font(Theme.UiFont.FontFamily, 9f * scale, FontStyle.Regular);
+                float scale = (float)Math.Sqrt(spineWidth / basis);
+                _spineFont = new Font(
+                    Theme.UiFont.FontFamily,
+                    // 上限 15pt：再大，长标题在一条边上就放不下了（放不下就只剩省略号）
+                    Math.Min(15f, Math.Max(9f, 9f * scale)),
+                    FontStyle.Regular);
                 _spineFontWidth = spineWidth;
             }
 
+            float iconScale = (float)Math.Sqrt(spineWidth / Math.Max(1, Dpi.Scale(23, dpi)));
             _spineIcon = Math.Min(
-                Dpi.Scale(22, dpi),
-                Math.Max(Dpi.Scale(13, dpi), spineWidth * 2 / 3));
+                Dpi.Scale(30, dpi),
+                Math.Max(Dpi.Scale(14, dpi), (int)Math.Round(Dpi.Scale(16, dpi) * iconScale)));
         }
 
         private int IconSize(int dpi)
