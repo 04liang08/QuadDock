@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>QuadDock</AssemblyName>
+    <RootNamespace>QuadDock</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <Product>QuadDock · 四边侧栏</Product>
+    <AssemblyTitle>QuadDock · 四边侧栏</AssemblyTitle>
+    <Description>把屏幕的上下左右四条边都变成空侧栏，工作区被真实挤压成中间一块。</Description>
+    <Version>0.1.0</Version>
+    <NeutralLanguage>zh-Hans</NeutralLanguage>
+    <Platforms>x64</Platforms>
+  </PropertyGroup>
+
+</Project>
