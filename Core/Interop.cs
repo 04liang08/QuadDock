@@ -50,12 +50,40 @@ namespace QuadDock.Core
         public uint dwFlags;
     }
 
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    internal struct SHFILEINFO
+    {
+        public IntPtr hIcon;
+        public int iIcon;
+        public uint dwAttributes;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szDisplayName;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
+        public string szTypeName;
+    }
+
     internal static class Win32
     {
         public const int WM_HOTKEY = 0x0312;
         public const int WM_MOUSEWHEEL = 0x020A;
         public const int WM_SETTINGCHANGE = 0x001A;
         public const int WM_DISPLAYCHANGE = 0x007E;
+        public const int WM_GETICON = 0x007F;
+
+        public const int ICON_SMALL = 0;
+        public const int ICON_BIG = 1;
+        public const int ICON_SMALL2 = 2;
+
+        public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+        public const uint SHGFI_ICON = 0x000000100;
+        public const uint SHGFI_LARGEICON = 0x000000000;
+        public const uint SHGFI_SMALLICON = 0x000000001;
+        public const uint SHGFI_PIDL = 0x000000008;
+
+        public const int DI_NORMAL = 0x0003;
 
         public const int GWL_EXSTYLE = -20;
         public const long WS_EX_TOOLWINDOW = 0x00000080L;
@@ -178,5 +206,92 @@ namespace QuadDock.Core
 
         [DllImport("shell32.dll")]
         public static extern UIntPtr SHAppBarMessage(uint message, ref APPBARDATA data);
+
+        // ---------- 应用图标 ----------
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        public static extern bool DrawIconEx(
+            IntPtr hdc, int x, int y, IntPtr hIcon, int cx, int cy, int frame, IntPtr brush, int flags);
+
+        [DllImport("user32.dll")]
+        public static extern bool DestroyIcon(IntPtr hIcon);
+
+        [DllImport("kernel32.dll")]
+        public static extern IntPtr OpenProcess(uint access, bool inherit, uint processId);
+
+        [DllImport("kernel32.dll")]
+        public static extern bool CloseHandle(IntPtr handle);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        public static extern bool QueryFullProcessImageName(
+            IntPtr process, uint flags, System.Text.StringBuilder name, ref int size);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        public static extern IntPtr SHGetFileInfo(
+            string path, uint attributes, ref SHFILEINFO info, uint infoSize, uint flags);
+
+        [DllImport("shell32.dll", EntryPoint = "SHGetFileInfoW", CharSet = CharSet.Unicode)]
+        public static extern IntPtr SHGetFileInfo(
+            IntPtr pidl, uint attributes, ref SHFILEINFO info, uint infoSize, uint flags);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        public static extern int SHParseDisplayName(
+            string name, IntPtr bindContext, out IntPtr pidl, uint attributesIn, out uint attributesOut);
+
+        [DllImport("shell32.dll")]
+        public static extern int SHGetPropertyStoreForWindow(
+            IntPtr hWnd, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out IPropertyStore store);
+
+        [DllImport("ole32.dll")]
+        public static extern int PropVariantClear(ref PROPVARIANT value);
+
+        [DllImport("ole32.dll")]
+        public static extern void CoTaskMemFree(IntPtr ptr);
+    }
+
+    /// <summary>只用到取 AppUserModelID 那一个属性，其余方法只为对齐 vtable 顺序。</summary>
+    [ComImport]
+    [Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IPropertyStore
+    {
+        [PreserveSig]
+        int GetCount(out uint count);
+
+        [PreserveSig]
+        int GetAt(uint index, out PROPERTYKEY key);
+
+        [PreserveSig]
+        int GetValue(ref PROPERTYKEY key, out PROPVARIANT value);
+
+        [PreserveSig]
+        int SetValue(ref PROPERTYKEY key, ref PROPVARIANT value);
+
+        [PreserveSig]
+        int Commit();
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct PROPERTYKEY
+    {
+        public Guid fmtid;
+        public uint pid;
+    }
+
+    /// <summary>x64 上是 24 字节，x86 上是 16 字节，这个布局两边都对上。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct PROPVARIANT
+    {
+        public ushort vt;
+        public ushort reserved1;
+        public ushort reserved2;
+        public ushort reserved3;
+        public IntPtr pointer;
+        public IntPtr pointer2;
+
+        public const ushort VT_LPWSTR = 31;
     }
 }

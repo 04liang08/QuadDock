@@ -123,7 +123,7 @@ namespace QuadDock.UI
                 RowHoverFill = Color.FromArgb(16, 30, 60, 120);
                 Separator = Color.FromArgb(20, 30, 50, 90);
                 Text = Color.FromArgb(30, 34, 41);
-                TextDim = Color.FromArgb(146, 154, 168);
+                TextDim = Color.FromArgb(124, 132, 148);
                 EmptyHint = Color.FromArgb(154, 162, 176);
                 Watermark = Color.FromArgb(228, 232, 240);
                 Accent = Color.FromArgb(64, 128, 255);

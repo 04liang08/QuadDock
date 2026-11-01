@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.Drawing.Text;
 using System.Text;
 using System.Windows.Forms;
 using QuadDock.Core;
@@ -8,9 +11,12 @@ using QuadDock.Core;
 namespace QuadDock.UI
 {
     /// <summary>
-    /// 一条边上的侧栏：列出它此刻压着的那个桌面上的窗口标题。
+    /// 一条边上的侧栏：列出它此刻压着的那个桌面上的窗口。
     /// 点标题把这个桌面换到中央并激活窗口，点空白只交换桌面；
     /// 拖动内边缘调宽窄，双击复位。
+    ///
+    /// 左右两侧窄的时候改走竖排：每行是一条"书脊"，文字转 90° 顺着边跑，
+    /// 一行能放下整条标题，不用再截成三四个字。
     /// </summary>
     internal sealed class StripForm : Form, IMessageFilter
     {
@@ -20,8 +26,23 @@ namespace QuadDock.UI
             public string Title;
             public Guid DesktopId;
             public bool Minimized;
+            public Bitmap Icon;
             public Rectangle Rect;
             public bool Hover;
+
+            /// <summary>竖排时把"图标 + 标题"预渲染成一条横向小图，贴的时候整体转 90°。</summary>
+            public Bitmap Label;
+            public string LabelKey;
+
+            public void DropLabel()
+            {
+                if (Label != null)
+                {
+                    Label.Dispose();
+                    Label = null;
+                }
+                LabelKey = null;
+            }
         }
 
         private const int PadLogical = 10;
@@ -30,6 +51,11 @@ namespace QuadDock.UI
         private const int ChipPadYLogical = 6;
         private const int RadiusLogical = 10;
         private const int BarLogical = 3;
+        private const int IconLogical = 16;
+        private const int IconGapLogical = 5;
+
+        /// <summary>窄于这个宽度（逻辑像素）的左右侧栏走竖排。</summary>
+        private const int SpineThresholdLogical = 150;
 
         private readonly Edge _edge;
         private readonly DockManager _manager;
@@ -45,6 +71,7 @@ namespace QuadDock.UI
         private int _pressIndex = -1;
         private bool _pressed;
         private bool _resizing;
+        private bool _spines;
         private int _resizePointerStart;
         private int _resizeThicknessStart;
         private int _lastDragTick;
@@ -144,7 +171,12 @@ namespace QuadDock.UI
             }
             _signature = signature;
 
+            foreach (Slot old in _slots)
+            {
+                old.DropLabel();
+            }
             _slots.Clear();
+
             foreach (DesktopWindow window in windows)
             {
                 _slots.Add(new Slot
@@ -152,7 +184,9 @@ namespace QuadDock.UI
                     Handle = window.Handle,
                     Title = window.Title,
                     DesktopId = window.DesktopId,
-                    Minimized = window.IsMinimized
+                    Minimized = window.IsMinimized,
+                    // 图标只在列表变化时取一次，按 exe 缓存，不会每帧查盘
+                    Icon = AppIcons.ForWindow(window.Handle)
                 });
             }
 
@@ -210,23 +244,46 @@ namespace QuadDock.UI
 
             int dpi = DeviceDpi;
             bool vertical = _edge.IsVertical();
-            bool narrow = (vertical ? width : height) < Dpi.Scale(130, dpi);
+            int thickness = vertical ? width : height;
+
+            _spines = vertical && thickness < Dpi.Scale(SpineThresholdLogical, dpi);
+            bool narrow = thickness < Dpi.Scale(150, dpi);
+
             int pad = Dpi.Scale(narrow ? 6 : PadLogical, dpi);
             int gap = Dpi.Scale(narrow ? 6 : GapLogical, dpi);
-            _gap = gap;
             int chipPadX = Dpi.Scale(ChipPadXLogical, dpi);
             int chipPadY = Dpi.Scale(ChipPadYLogical, dpi);
-            if (chipPadX * 2 >= width)
+            if (!_spines && chipPadX * 2 >= width)
             {
                 chipPadX = Math.Max(2, (width - Dpi.Scale(12, dpi)) / 2);
             }
+
+            _gap = gap;
             _chipPadX = chipPadX;
             _chipPadY = chipPadY;
 
+            if (_spines)
+            {
+                LayoutSpines(dpi, pad, gap, chipPadX);
+            }
+            else
+            {
+                LayoutRows(dpi, pad, gap, chipPadX, chipPadY, vertical);
+            }
+
+            Invalidate();
+        }
+
+        /// <summary>横排：标题一行一条，宽度按文字长度自适应（上/下边栏和很宽的左右栏走这条）。</summary>
+        private void LayoutRows(int dpi, int pad, int gap, int chipPadX, int chipPadY, bool vertical)
+        {
+            int width = ClientSize.Width;
+            int height = ClientSize.Height;
             int viewport = vertical ? height : width;
+
             int chipWidth = Math.Max(Dpi.Scale(24, dpi), width - pad * 2);
             int chipHeight = vertical
-                ? Math.Max(Dpi.Scale(26, dpi), Font.Height + chipPadY * 2)
+                ? Math.Max(Dpi.Scale(28, dpi), Font.Height + chipPadY * 2)
                 : Math.Max(Dpi.Scale(22, dpi), height - pad * 2);
 
             var sizes = new int[_slots.Count];
@@ -240,14 +297,12 @@ namespace QuadDock.UI
                 }
                 else
                 {
-                    int textWidth = TextRenderer.MeasureText(
-                        _slots[i].Title,
-                        Font,
-                        new Size(1000, 1000),
-                        TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix).Width;
+                    int iconWidth = _slots[i].Icon != null
+                        ? Dpi.Scale(IconLogical, dpi) + Dpi.Scale(IconGapLogical, dpi)
+                        : 0;
                     size = Math.Max(
                         Dpi.Scale(70, dpi),
-                        Math.Min(Dpi.Scale(260, dpi), textWidth + chipPadX * 2));
+                        Math.Min(Dpi.Scale(300, dpi), Measure(_slots[i].Title) + chipPadX * 2 + iconWidth));
                 }
                 sizes[i] = size;
                 total += size;
@@ -265,8 +320,95 @@ namespace QuadDock.UI
                     : new Rectangle(offset, pad, sizes[i], chipHeight);
                 offset += sizes[i] + gap;
             }
+        }
 
-            Invalidate();
+        /// <summary>
+        /// 竖排：每一行是一条竖着的"书脊"，宽度只有窄窄一条，文字旋转 90° 顺着边跑，
+        /// 于是整条标题都能放进来。横向放得下几列就放几列，按高度均衡分配。
+        /// </summary>
+        private void LayoutSpines(int dpi, int pad, int gap, int chipPad)
+        {
+            int width = ClientSize.Width;
+            int height = ClientSize.Height;
+
+            int iconSize = Dpi.Scale(IconLogical, dpi);
+            int iconGap = Dpi.Scale(IconGapLogical, dpi);
+            int minSpine = Dpi.Scale(22, dpi);
+
+            int usable = Math.Max(minSpine, width - pad * 2);
+            int columns = Math.Max(1, Math.Min(4, (usable + gap) / (minSpine + gap)));
+            int spineWidth = Math.Max(minSpine, (usable - (columns - 1) * gap) / columns);
+            int block = columns * spineWidth + (columns - 1) * gap;
+            int startX = pad + Math.Max(0, (width - pad * 2 - block) / 2);
+
+            // 单条再长也留一半给别的窗口，超出的截断
+            int maxSpine = Math.Max(Dpi.Scale(120, dpi), height / 2);
+
+            var heights = new int[_slots.Count];
+            int total = 0;
+            for (int i = 0; i < _slots.Count; i++)
+            {
+                int extra = _slots[i].Icon != null ? iconSize + iconGap : 0;
+                int h = chipPad * 2 + extra + Measure(_slots[i].Title);
+                h = Math.Max(h, Dpi.Scale(52, dpi));
+                h = Math.Min(h, maxSpine);
+                heights[i] = h;
+                total += h + gap;
+            }
+            if (total > 0)
+            {
+                total -= gap;
+            }
+
+            // 按累计高度分配列，尽量让每列一样高
+            var columnOf = new int[_slots.Count];
+            var columnHeight = new int[columns];
+            int before = 0;
+            for (int i = 0; i < _slots.Count; i++)
+            {
+                int column = total <= 0
+                    ? 0
+                    : Math.Min(columns - 1, before * columns / total);
+                columnOf[i] = column;
+                columnHeight[column] += heights[i] + gap;
+                before += heights[i] + gap;
+            }
+
+            int tallest = 0;
+            foreach (int value in columnHeight)
+            {
+                tallest = Math.Max(tallest, value);
+            }
+
+            _content = _slots.Count == 0 ? 0 : pad * 2 + tallest - gap;
+            int maxScroll = Math.Max(0, _content - height);
+            _scroll = Math.Max(0, Math.Min(_scroll, maxScroll));
+
+            var cursor = new int[columns];
+            for (int i = 0; i < _slots.Count; i++)
+            {
+                int column = columnOf[i];
+                _slots[i].Rect = new Rectangle(
+                    startX + column * (spineWidth + gap),
+                    pad + cursor[column] - _scroll,
+                    spineWidth,
+                    heights[i]);
+                cursor[column] += heights[i] + gap;
+            }
+        }
+
+        private int Measure(string text)
+        {
+            return TextRenderer.MeasureText(
+                text,
+                Font,
+                new Size(1000, 1000),
+                TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix).Width;
+        }
+
+        private int IconSize(int dpi)
+        {
+            return Dpi.Scale(IconLogical, dpi);
         }
 
         // ---------- 绘制 ----------
@@ -279,9 +421,7 @@ namespace QuadDock.UI
             int dpi = DeviceDpi;
             int radius = Dpi.Scale(RadiusLogical, dpi);
             Rectangle clip = ClientRectangle;
-            bool card = Theme.Style == StripStyle.Card;
 
-            // 水印在卡片下面，先把地铺好
             if (_slots.Count > 0)
             {
                 DrawWatermark(g, dpi);
@@ -295,17 +435,9 @@ namespace QuadDock.UI
                     continue;
                 }
 
-                bool focus = _recent != IntPtr.Zero && slot.Handle == _recent;
-                if (card)
-                {
-                    PaintCard(g, slot, dpi, radius, focus);
-                }
-                else
-                {
-                    PaintRow(g, slot, i, dpi, radius, focus);
-                }
-
-                PaintTitle(g, slot);
+                bool marked = _recent != IntPtr.Zero && slot.Handle == _recent;
+                PaintBackground(g, slot, i, dpi, radius, marked);
+                PaintContent(g, slot, dpi);
             }
 
             if (_slots.Count == 0)
@@ -317,101 +449,134 @@ namespace QuadDock.UI
             DrawEdgeLine(g, dpi);
         }
 
-        /// <summary>卡片式：有底、有投影、顶部一条高光；悬停整块提亮并描一圈强调色。</summary>
-        private void PaintCard(Graphics g, Slot slot, int dpi, int radius, bool focus)
+        private void PaintBackground(Graphics g, Slot slot, int index, int dpi, int radius, bool marked)
         {
             Rectangle rect = slot.Rect;
             int line = Math.Max(1, Dpi.Scale(1, dpi));
 
-            Rectangle shadow = rect;
-            shadow.Offset(0, Math.Max(1, Dpi.Scale(2, dpi)));
-            Painter.FillRounded(g, shadow, radius, Theme.CardShadow);
-
-            Painter.FillRounded(
-                g,
-                rect,
-                radius,
-                slot.Hover || focus ? Theme.CardHoverFill : Theme.CardFill);
-
-            // 顶部 1px 高光：比投影便宜，也更能让人觉得卡片是"浮"着的
-            int inset = Math.Min(radius, rect.Width / 2);
-            int width = Math.Max(0, rect.Width - inset * 2);
-            if (width > 0)
+            if (Theme.Style == StripStyle.Card)
             {
-                using (var brush = new SolidBrush(Theme.CardHighlight))
+                Rectangle shadow = rect;
+                shadow.Offset(0, Math.Max(1, Dpi.Scale(2, dpi)));
+                Painter.FillRounded(g, shadow, radius, Theme.CardShadow);
+
+                Painter.FillRounded(
+                    g,
+                    rect,
+                    radius,
+                    slot.Hover || marked ? Theme.CardHoverFill : Theme.CardFill);
+
+                // 顶部 1px 高光：比投影便宜，也更能让人觉得卡片是"浮"着的
+                int inset = Math.Min(radius, Math.Min(rect.Width, rect.Height) / 2);
+                int width = Math.Max(0, rect.Width - inset * 2);
+                if (width > 0)
                 {
-                    g.FillRectangle(brush, new Rectangle(rect.X + inset, rect.Y, width, line));
+                    using (var brush = new SolidBrush(Theme.CardHighlight))
+                    {
+                        g.FillRectangle(brush, new Rectangle(rect.X + inset, rect.Y, width, line));
+                    }
+                }
+
+                if (slot.Hover)
+                {
+                    Painter.StrokeRounded(g, rect, radius, Theme.AccentRing, line);
+                }
+                else if (!marked)
+                {
+                    Painter.StrokeRounded(g, rect, radius, Theme.CardBorder, line);
                 }
             }
-
-            if (slot.Hover)
+            else
             {
-                Painter.StrokeRounded(g, rect, radius, Theme.AccentRing, line);
-            }
-            else if (!focus)
-            {
-                Painter.StrokeRounded(g, rect, radius, Theme.CardBorder, line);
-            }
-
-            if (focus)
-            {
-                PaintFocusBar(g, rect, dpi, radius);
-            }
-        }
-
-        /// <summary>列表式：没有卡片底，靠细分隔线分栏，悬停时整行浮起一层。</summary>
-        private void PaintRow(Graphics g, Slot slot, int index, int dpi, int radius, bool focus)
-        {
-            Rectangle rect = slot.Rect;
-            int line = Math.Max(1, Dpi.Scale(1, dpi));
-
-            if (slot.Hover || focus)
-            {
-                Painter.FillRounded(g, rect, radius, Theme.RowHoverFill);
-            }
-            else if (index > 0)
-            {
-                int gap = Math.Max(2, _gap);
-                Rectangle separator = _edge.IsVertical()
-                    ? new Rectangle(rect.X, rect.Y - gap / 2, rect.Width, line)
-                    : new Rectangle(rect.X - gap / 2, rect.Y, line, rect.Height);
-                if (separator.Width > 0 && separator.Height > 0)
+                if (slot.Hover || marked)
                 {
-                    using (var brush = new SolidBrush(Theme.Separator))
+                    Painter.FillRounded(g, rect, radius, Theme.RowHoverFill);
+                }
+                else if (index > 0 && !_spines)
+                {
+                    int gap = Math.Max(2, _gap);
+                    Rectangle separator = _edge.IsVertical()
+                        ? new Rectangle(rect.X, rect.Y - gap / 2, rect.Width, line)
+                        : new Rectangle(rect.X - gap / 2, rect.Y, line, rect.Height);
+                    if (separator.Width > 0 && separator.Height > 0)
                     {
-                        g.FillRectangle(brush, separator);
+                        using (var brush = new SolidBrush(Theme.Separator))
+                        {
+                            g.FillRectangle(brush, separator);
+                        }
                     }
                 }
             }
 
-            if (focus)
+            if (marked)
             {
-                PaintFocusBar(g, rect, dpi, radius);
+                PaintMark(g, rect, dpi, radius);
             }
         }
 
-        /// <summary>上次在这个桌面上用过的窗口：贴着卡片阅读侧的一条强调色竖条。</summary>
-        private void PaintFocusBar(Graphics g, Rectangle rect, int dpi, int radius)
+        /// <summary>
+        /// 上次用过的窗口：贴着卡片左沿的一条强调色竖条。
+        /// 竖排的书脊只有 22px 宽，顶部放横条会从圆角外面露出来，所以统一放左边。
+        /// </summary>
+        private void PaintMark(Graphics g, Rectangle rect, int dpi, int radius)
         {
             int width = Math.Max(2, Dpi.Scale(BarLogical, dpi));
-            int inset = Math.Max(width, radius / 2);
-            int height = rect.Height - inset * 2;
-            if (height < Dpi.Scale(8, dpi))
+            int edge = Math.Max(1, Dpi.Scale(1, dpi));
+
+            // 两端收到圆角直边之内，否则会从圆弧里冒出来
+            int room = Math.Min(radius, Math.Max(0, (rect.Height - Dpi.Scale(10, dpi)) / 2));
+            int height = rect.Height - room * 2;
+
+            var bar = new Rectangle(rect.X + edge, rect.Y + room, width, height);
+            if (bar.Width <= 0 || bar.Height <= 0)
             {
                 return;
             }
 
-            var bar = new Rectangle(
-                rect.X + Math.Max(1, Dpi.Scale(1, dpi)),
-                rect.Y + inset,
-                width,
-                height);
             Painter.FillRounded(g, bar, width / 2, Theme.Accent);
         }
 
-        private void PaintTitle(Graphics g, Slot slot)
+        private void PaintContent(Graphics g, Slot slot, int dpi)
         {
+            if (_spines)
+            {
+                Bitmap label = LabelFor(slot, dpi);
+                if (label == null)
+                {
+                    return;
+                }
+
+                GraphicsState state = g.Save();
+                try
+                {
+                    // 从卡片右上角起转 90°：内容条的第一格落在顶部，文字顺着边往下走
+                    g.TranslateTransform(slot.Rect.Right, slot.Rect.Y);
+                    g.RotateTransform(90f);
+                    g.DrawImage(label, 0, 0, label.Width, label.Height);
+                }
+                finally
+                {
+                    g.Restore(state);
+                }
+                return;
+            }
+
             Rectangle textRect = Rectangle.Inflate(slot.Rect, -_chipPadX, -_chipPadY);
+            int iconSize = IconSize(dpi);
+
+            if (slot.Icon != null)
+            {
+                int iconGap = Dpi.Scale(IconGapLogical, dpi);
+                var iconRect = new Rectangle(
+                    slot.Rect.X + _chipPadX,
+                    slot.Rect.Y + (slot.Rect.Height - iconSize) / 2,
+                    iconSize,
+                    iconSize);
+                DrawIcon(g, slot.Icon, iconRect);
+                textRect.X += iconSize + iconGap;
+                textRect.Width -= iconSize + iconGap;
+            }
+
             if (textRect.Width <= 0 || textRect.Height <= 0)
             {
                 return;
@@ -428,6 +593,87 @@ namespace QuadDock.UI
                 | TextFormatFlags.EndEllipsis
                 | TextFormatFlags.NoPrefix
                 | TextFormatFlags.SingleLine);
+        }
+
+        /// <summary>
+        /// 把"图标 + 标题"画成一条横向小图，交给外面旋转贴上去。
+        /// 只有 90° 的整数旋转，用最近邻缩放也不会有任何损失。
+        /// </summary>
+        private Bitmap LabelFor(Slot slot, int dpi)
+        {
+            int length = slot.Rect.Height;
+            int thickness = slot.Rect.Width;
+            if (length <= 0 || thickness <= 0)
+            {
+                return null;
+            }
+
+            string key = slot.Title + "|" + length + "|" + thickness + "|" + dpi
+                         + "|" + (slot.Minimized ? 1 : 0)
+                         + "|" + (Theme.IsDark ? 1 : 0)
+                         + "|" + (slot.Icon != null ? 1 : 0);
+            if (slot.Label != null && slot.LabelKey == key)
+            {
+                return slot.Label;
+            }
+
+            slot.DropLabel();
+
+            int pad = _chipPadX;
+            int iconSize = IconSize(dpi);
+            int iconGap = Dpi.Scale(IconGapLogical, dpi);
+            int textX = pad + (slot.Icon != null ? iconSize + iconGap : 0);
+            int textWidth = Math.Max(0, length - textX - pad);
+
+            var bitmap = new Bitmap(length, thickness, PixelFormat.Format32bppArgb);
+            using (Graphics g = Graphics.FromImage(bitmap))
+            {
+                g.Clear(Color.Transparent);
+                // 旋转过的文字用不了 ClearType（它是按横向子像素排的），用灰度抗锯齿才对
+                g.TextRenderingHint = TextRenderingHint.AntiAlias;
+
+                if (slot.Icon != null)
+                {
+                    DrawIcon(g, slot.Icon, new Rectangle(pad, (thickness - iconSize) / 2, iconSize, iconSize));
+                }
+
+                if (textWidth > 0)
+                {
+                    using (var brush = new SolidBrush(slot.Minimized ? Theme.TextDim : Theme.Text))
+                    using (var format = new StringFormat(StringFormatFlags.NoWrap))
+                    {
+                        format.Trimming = StringTrimming.EllipsisCharacter;
+                        format.LineAlignment = StringAlignment.Center;
+                        g.DrawString(
+                            slot.Title,
+                            Font,
+                            brush,
+                            new RectangleF(textX, 0, textWidth, thickness),
+                            format);
+                    }
+                }
+            }
+
+            slot.Label = bitmap;
+            slot.LabelKey = key;
+            return bitmap;
+        }
+
+        private static void DrawIcon(Graphics g, Bitmap icon, Rectangle rect)
+        {
+            InterpolationMode previous = g.InterpolationMode;
+            PixelOffsetMode previousOffset = g.PixelOffsetMode;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            try
+            {
+                g.DrawImage(icon, rect);
+            }
+            finally
+            {
+                g.InterpolationMode = previous;
+                g.PixelOffsetMode = previousOffset;
+            }
         }
 
         /// <summary>
@@ -451,7 +697,7 @@ namespace QuadDock.UI
 
             int margin = Dpi.Scale(4, dpi);
 
-            // 放在远端：卡片从上往下长，远端那块永远是最空的
+            // 放在远端：内容从近端往里长，远端那块永远是最空的
             Rectangle area = _edge.IsVertical()
                 ? new Rectangle(0, ClientSize.Height - size.Height - margin, ClientSize.Width, size.Height)
                 : new Rectangle(ClientSize.Width - size.Width - margin, 0, size.Width, ClientSize.Height);
@@ -837,6 +1083,10 @@ namespace QuadDock.UI
         {
             Application.RemoveMessageFilter(this);
             _tip.Dispose();
+            foreach (Slot slot in _slots)
+            {
+                slot.DropLabel();
+            }
             base.OnFormClosed(e);
         }
     }
